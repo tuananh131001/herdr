@@ -1,8 +1,8 @@
 diff --git a/vendor/libghostty-vt/src/terminal/Screen.zig b/vendor/libghostty-vt/src/terminal/Screen.zig
-index d0d2b929..70b92124 100644
+index a6a511a8d..d460881e5 100644
 --- a/vendor/libghostty-vt/src/terminal/Screen.zig
 +++ b/vendor/libghostty-vt/src/terminal/Screen.zig
-@@ -1518,7 +1518,8 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
+@@ -1611,7 +1611,8 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
      }
  
      // If we have a hyperlink then we need to release it from the old page.
@@ -12,7 +12,7 @@ index d0d2b929..70b92124 100644
          const old_page: *Page = self.cursor.page_pin.node.page();
          old_page.hyperlink_set.release(old_page.memory, self.cursor.hyperlink_id);
          // Zero the ID, it is invalid now and style changes below may
-@@ -1530,6 +1531,10 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
+@@ -1623,6 +1624,10 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
      // Update our pin to the new page
      self.cursor.page_pin.* = new;
  
@@ -23,7 +23,7 @@ index d0d2b929..70b92124 100644
      // On the new page, we need to migrate our style
      if (old_style_) |old_style| {
          self.cursor.style = old_style;
-@@ -1546,10 +1551,14 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
+@@ -1639,10 +1644,14 @@ inline fn cursorChangePin(self: *Screen, new: Pin) void {
  
      // On the new page, we need to migrate our hyperlink
      if (self.cursor.hyperlink) |link| {
@@ -41,7 +41,7 @@ index d0d2b929..70b92124 100644
  
          // Re-add
          self.startHyperlink(link.uri, switch (link.id) {
-@@ -5021,6 +5030,83 @@ test "Screen: cursorAbsolute to page with insufficient capacity" {
+@@ -5314,6 +5323,83 @@ test "Screen: cursorAbsolute to page with insufficient capacity" {
      new_page.assertIntegrity();
  }
  
@@ -66,7 +66,7 @@ index d0d2b929..70b92124 100644
 +        var n: u24 = 1;
 +        while (start_page.styles.add(
 +            start_page.memory,
-+            .{ .bg_color = .{ .rgb = @bitCast(n) } },
++            .{ .bg_color = .rgb(@bitCast(n)) },
 +        )) |_| n += 1 else |_| {}
 +    }
 +
@@ -107,7 +107,7 @@ index d0d2b929..70b92124 100644
 +        var n: u24 = 1;
 +        while (destination_page.styles.add(
 +            destination_page.memory,
-+            .{ .bg_color = .{ .rgb = @bitCast(n) } },
++            .{ .bg_color = .rgb(@bitCast(n)) },
 +        )) |_| n += 1 else |_| {}
 +    }
 +

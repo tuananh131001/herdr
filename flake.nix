@@ -93,7 +93,7 @@
               ninja
               pkg-config
               rustToolchain
-              zig_0_16
+              zig_0_17
             ];
 
             env = {

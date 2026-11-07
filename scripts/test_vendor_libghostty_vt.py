@@ -49,6 +49,45 @@ class VendorLibghosttyVtTests(unittest.TestCase):
                 with self.assertRaisesRegex(FileNotFoundError, "HEAD 012345678"):
                     ensure_dist_archive(repo)
 
+    def test_ensure_dist_archive_accepts_release_archive_only_for_head_tag(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo = Path(temp_dir)
+            dist = repo / "zig-out" / "dist"
+            dist.mkdir(parents=True)
+            release = dist / "libghostty-vt-1.0.0.tar.gz"
+            release.write_bytes(b"release")
+            (dist / "libghostty-vt-0.9.0.tar.gz").write_bytes(b"stale release")
+
+            def git_output(tags: str):
+                def output(command: list[str], **_kwargs: object) -> str:
+                    if command[1] == "status":
+                        return ""
+                    if command[1] == "tag":
+                        return tags
+                    return "0123456789abcdef\n"
+
+                return output
+
+            with (
+                mock.patch("scripts.vendor_libghostty_vt.subprocess.run"),
+                mock.patch(
+                    "scripts.vendor_libghostty_vt.subprocess.check_output",
+                    side_effect=git_output("v1.3.2\nvt-1.0.0\n"),
+                ),
+            ):
+                self.assertEqual(ensure_dist_archive(repo), release)
+
+            for tags in ("", "v1.0.0\n", "vt-1.0.1\n"):
+                with (
+                    mock.patch("scripts.vendor_libghostty_vt.subprocess.run"),
+                    mock.patch(
+                        "scripts.vendor_libghostty_vt.subprocess.check_output",
+                        side_effect=git_output(tags),
+                    ),
+                ):
+                    with self.assertRaisesRegex(FileNotFoundError, "HEAD 012345678"):
+                        ensure_dist_archive(repo)
+
     def test_require_clean_checkout_rejects_tracked_and_untracked_changes(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = Path(temp_dir)

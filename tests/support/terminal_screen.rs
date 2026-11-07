@@ -1,4 +1,4 @@
-use std::{mem::size_of, ptr};
+use std::ptr;
 
 // Reuse the generated C API; this test observer needs only terminal parsing and formatting.
 use ghostty_vt::ffi;
@@ -22,20 +22,11 @@ pub fn text(output: &[u8], cols: u16, rows: u16) -> String {
         terminal: ptr::null_mut(),
         formatter: ptr::null_mut(),
     };
-    let options = ffi::GhosttyFormatterTerminalOptions {
-        size: size_of::<ffi::GhosttyFormatterTerminalOptions>(),
-        emit: ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_PLAIN,
-        trim: true,
-        extra: ffi::GhosttyFormatterTerminalExtra {
-            size: size_of::<ffi::GhosttyFormatterTerminalExtra>(),
-            screen: ffi::GhosttyFormatterScreenExtra {
-                size: size_of::<ffi::GhosttyFormatterScreenExtra>(),
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-        ..Default::default()
-    };
+    // Plain text, trimmed, not unwrapped, with no extras.
+    let emit = ffi::GhosttyFormatterFormat_GHOSTTY_FORMATTER_FORMAT_PLAIN;
+    let trim = true;
+    let unwrap = false;
+    let extras: ffi::GhosttyFormatterExtras = 0;
     unsafe {
         assert_eq!(
             ffi::ghostty_terminal_new(ptr::null(), &mut screen.terminal, cols, rows),
@@ -46,11 +37,33 @@ pub fn text(output: &[u8], cols: u16, rows: u16) -> String {
             ffi::ghostty_formatter_terminal_new(
                 ptr::null(),
                 &mut screen.formatter,
-                screen.terminal,
-                options,
+                screen.terminal
             ),
             ffi::GhosttyResult_GHOSTTY_SUCCESS
         );
+        for (option, value) in [
+            (
+                ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_EMIT,
+                (&emit as *const ffi::GhosttyFormatterFormat).cast(),
+            ),
+            (
+                ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_TRIM,
+                (&trim as *const bool).cast(),
+            ),
+            (
+                ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_UNWRAP,
+                (&unwrap as *const bool).cast(),
+            ),
+            (
+                ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_EXTRAS,
+                (&extras as *const ffi::GhosttyFormatterExtras).cast(),
+            ),
+        ] {
+            assert_eq!(
+                ffi::ghostty_formatter_set(screen.formatter, option, value),
+                ffi::GhosttyResult_GHOSTTY_SUCCESS
+            );
+        }
         let mut len = 0;
         let result =
             ffi::ghostty_formatter_format_buf(screen.formatter, ptr::null_mut(), 0, &mut len);

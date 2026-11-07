@@ -3,8 +3,7 @@
   stdenv,
   rustPlatform,
   callPackage,
-  runCommand,
-  zig_0_16,
+  zig_0_17,
   zstd,
   pkg-config,
   git,
@@ -14,17 +13,11 @@
 
 let
   manifest = lib.importTOML ../Cargo.toml;
-  zigDeps = callPackage ../vendor/libghostty-vt/build.zig.zon.nix {
+  # libghostty-vt 1.0 builds real package directories, so the former
+  # copying linkFarm override is no longer needed.
+  zigDeps = callPackage ../vendor/libghostty-vt/deps/packages.nix {
     name = "herdr-libghostty-vt-zig-cache";
-    inherit zstd;
-    linkFarm =
-      name: entries:
-      runCommand name { } ''
-        mkdir -p $out
-        ${lib.concatMapStringsSep "\n" (entry: ''
-          cp -rL ${entry.path} $out/${entry.name}
-        '') entries}
-      '';
+    inherit zig_0_17 zstd;
   };
   darwinToolchain = lib.optionals stdenv.hostPlatform.isDarwin [
     cctools
@@ -68,7 +61,7 @@ rustPlatform.buildRustPackage {
     LIBGHOSTTY_VT_OPTIMIZE = "ReleaseFast";
     LIBGHOSTTY_VT_SIMD = "true";
     LIBGHOSTTY_VT_ZIG_SYSTEM_DIR = zigDeps;
-    ZIG = lib.getExe zig_0_16;
+    ZIG = lib.getExe zig_0_17;
   };
 
   preBuild = ''

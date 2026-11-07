@@ -45,7 +45,7 @@ fn main() {
         vendored_dir.join("include"),
         vendored_dir.join("pkg"),
         vendored_dir.join("src"),
-        vendored_dir.join("VERSION"),
+        vendored_dir.join("LIB_VERSION"),
     ] {
         println!("cargo:rerun-if-changed={}", path.display());
     }
@@ -59,8 +59,8 @@ fn main() {
     let simd = env_bool("LIBGHOSTTY_VT_SIMD").unwrap_or(true);
     let target = env::var("TARGET").expect("TARGET");
     let zig_target = zig_target(&target);
-    let version_string = fs::read_to_string(vendored_dir.join("VERSION"))
-        .expect("failed to read vendored libghostty-vt VERSION")
+    let version_string = fs::read_to_string(vendored_dir.join("LIB_VERSION"))
+        .expect("failed to read vendored libghostty-vt LIB_VERSION")
         .trim()
         .to_string();
 
@@ -79,7 +79,7 @@ fn main() {
         .arg(format!("-Doptimize={optimize}"))
         .arg(format!("-Dsimd={simd}"))
         .arg(format!("-Dtarget={zig_target}"))
-        .arg(format!("-Dversion-string={version_string}"))
+        .arg(format!("-Dlib-version-string={version_string}"))
         .arg("-Demit-xcframework=false");
     if target.ends_with("windows-msvc") {
         if let Some(libc_file) = env::var_os("LIBGHOSTTY_VT_WINDOWS_LIBC") {
@@ -102,7 +102,7 @@ fn main() {
                 panic!(
                     "zig executable not found (looked for {zig:?}; set the ZIG \
                      environment variable to point at the zig binary). Building \
-                     the vendored libghostty-vt requires Zig 0.16.0: install it from \
+                     the vendored libghostty-vt requires Zig 0.17.0: install it from \
                      https://ziglang.org/download/, then retry the build"
                 );
             }
@@ -111,8 +111,8 @@ fn main() {
     assert!(
         status.success(),
         "zig build for vendored libghostty-vt failed: {status}. \
-         Building Herdr requires Zig 0.16.0; check `zig version` \
-         or set ZIG to the path of a Zig 0.16.0 binary, then retry"
+         Building Herdr requires Zig 0.17.0; check `zig version` \
+         or set ZIG to the path of a Zig 0.17.0 binary, then retry"
     );
 
     let mut lib_dir = zig_prefix.join("lib");

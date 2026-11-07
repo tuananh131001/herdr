@@ -4,6 +4,12 @@ This file tracks intentional local changes applied on top of the vendored
 `libghostty-vt` source. Remove a patch only when the vendored source commit
 contains the upstream behavior and the listed verification still passes.
 
+Local enum values start at 10000. Upstream assigns key enum values
+sequentially, and libghostty-vt 1.0 inserted `INVALID = 0` and new keys into
+the values Herdr previously used, so a sequential local value can silently
+alias an upstream key after an update. Keep every local value at 10000 or
+above.
+
 ## 0002 expose modifyOtherKeys mode through terminal data
 
 status: active
@@ -17,7 +23,7 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+vendored base: `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec` (tag `vt-1.0.0`)
 
 local files:
 
@@ -28,8 +34,8 @@ reason: Herdr must know whether xterm modifyOtherKeys mode 2 is active to
 request printable key releases from the outer terminal. The formatter API can
 recover this fact only by formatting the active screen and scrollback. A typed
 terminal-data query exposes the authoritative scalar without formatting or
-allocation. The local query uses value 41; upstream now owns the previous
-local value 33 for VT processing errors.
+allocation. The local query uses value 10000; upstream owns the earlier local
+values 33 (VT processing errors) and 41 (mouse shape).
 
 remove when: the vendored source exposes an equivalent scalar query for
 modifyOtherKeys mode 2 and Herdr can use it without this patch.
@@ -38,7 +44,7 @@ verification:
 
 ```sh
 just test-one modify_other_keys
-just test-one host_report_all_supplies_printable_releases_for_event_type_only_panes
+just test-one modify_other_keys_query_tracks_mode_two
 just maintenance-test
 just ui-hot-path-architecture-test
 ```
@@ -60,7 +66,7 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+vendored base: `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec` (tag `vt-1.0.0`)
 
 local files:
 
@@ -68,10 +74,12 @@ local files:
 - `vendor/libghostty-vt/pkg/wuffs/src/main.zig`
 
 reason: Wuffs now needs MSVC libc headers when targeting Windows. Zig's
-`--libc` configuration reaches C compilation, but the translate-c dependency
-requires its own explicit configuration. Forward the same file so cross-builds
-can use an actual Windows SDK instead of changing the target ABI or skipping
-compilation. Native builds without a libc override are unchanged.
+`--libc` configuration reaches C compilation, but the translate-c step runs
+separately and needs its own explicit configuration. Zig 0.17 no longer
+exposes the build's `--libc` file to build scripts, so Windows builds read the
+same Zig libc configuration from `LIBGHOSTTY_VT_WINDOWS_LIBC`, which
+`crates/ghostty-vt/build.rs` already sets for Windows MSVC. Other targets keep
+upstream's `.detect_darwin` default.
 
 The no-libc Wuffs module also exports hidden weak calloc/free stubs. On hosted
 Linux with SIMD disabled, those definitions override the Rust executable's
@@ -103,7 +111,7 @@ upstream discussion: not opened
 upstream pr: not opened; related merged PR https://github.com/ghostty-org/ghostty/pull/10132
 implements URL selection in the application layer, not the libghostty C API.
 
-vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+vendored base: `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec` (tag `vt-1.0.0`)
 
 local files:
 
@@ -118,7 +126,8 @@ without scanning an arbitrarily long logical line. The new, opt-in API shares
 one cell-inspection budget across both directions and returns no selection on
 exhaustion, never a truncated link. Its scan skips wide-character spacer cells.
 The existing word-selection functions and option layouts remain unchanged;
-only Herdr's link activation uses the new function.
+only Herdr's link activation uses the new function. Upstream `selectWord` now
+follows wide-character spacers too, but it is still unbounded.
 
 remove when: upstream provides an equivalent bounded, wrap-aware selection API
 that handles wide-character spacers, and Herdr passes the tests below using it
@@ -145,7 +154,7 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+vendored base: `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec` (tag `vt-1.0.0`)
 
 local files:
 
@@ -183,7 +192,7 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+vendored base: `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec` (tag `vt-1.0.0`)
 
 local files:
 
@@ -194,6 +203,8 @@ local files:
 - `vendor/libghostty-vt/src/terminal/kitty/graphics_image.zig`
 - `vendor/libghostty-vt/src/terminal/kitty/graphics_exec.zig`
 - `vendor/libghostty-vt/src/terminal/kitty/graphics_storage.zig`
+- `vendor/libghostty-vt/src/terminal/snapshot/kitty.zig`
+- `vendor/libghostty-vt/src/terminal/c/types.zig`
 
 reason: An explicitly enabled embedding mode retains structurally validated,
 quiet PNG uploads as encoded bytes, avoiding pixel decoding before forwarding
@@ -213,6 +224,13 @@ file backing before reading pixels. Herdr installs this callback automatically
 on Linux, using same-filesystem CoW snapshots. It never retains a mutable producer pathname. Unsupported snapshots
 use the original loader; animation materializes pixels transactionally. Backing
 ownership and bounded reads are explicit in the embedding ABI.
+
+Local terminal options use values 10000 and 10001 and local image data keys
+use 10000 to 10003. The callback and struct types are registered in the C type
+registry. Terminal snapshots write pixel payloads only for decoded images:
+retained encoded or host-backed images record their decoded size and restore
+as pending, instead of reaching the encoder's decoded-bytes assertion. A NULL
+value for `KITTY_IMAGE_PRESERVE_PNG` remains a no-op.
 
 remove when: upstream provides an equivalent opt-in owned encoded-image
 representation and immutable host-backed raw sources with bounded storage,
@@ -241,7 +259,7 @@ upstream discussion: not opened
 
 upstream pr: not opened
 
-vendored base: `44f2a44df7e8c4a0c6df3f7d872ef3d7ead88e51`
+vendored base: `0fa3d577a5614150ff8e2c152de5fb9d5c6d2dec` (tag `vt-1.0.0`)
 
 local files:
 
@@ -252,9 +270,9 @@ non-default style are active can grow that page. Growth replaces the page,
 re-adds the same heap hyperlink, and frees it. The outer move then clears
 the pointer without clearing the id that replacement just installed, so
 `endHyperlink` dereferences null and the server dies. The same sequence is
-still present on upstream main (`cursorChangePin` around line 1606 and
-`cursorPageReplaced` around line 706 at 22fa134a0). This is not the one-row
-scrollback prune fixed by 65ff54c67.
+still present at `vt-1.0.0`: with only this patch's tests applied, both tests
+crash (`attempt to use null value` and `reached unreachable code`). This is not
+the one-row scrollback prune fixed by 65ff54c67.
 
 The same function also crashes when style migration hits the maximum style
 capacity: the page split moves the cursor again, and the nested pin change

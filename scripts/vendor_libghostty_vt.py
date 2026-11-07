@@ -33,6 +33,12 @@ def git_head(repo: Path) -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
 
 
+def head_release_versions(repo: Path) -> list[str]:
+    """Versions of the libghostty-vt release tags (vt-X.Y.Z) at HEAD."""
+    tags = subprocess.check_output(["git", "tag", "--points-at", "HEAD"], cwd=repo, text=True)
+    return sorted(tag[len("vt-") :] for tag in tags.split() if tag.startswith("vt-"))
+
+
 def require_clean_checkout(repo: Path) -> None:
     status = subprocess.check_output(
         ["git", "status", "--porcelain", "--untracked-files=all"],
@@ -54,6 +60,15 @@ def ensure_dist_archive(source_repo: Path) -> Path:
     require_clean_checkout(source_repo)
     dist_dir = source_repo / "zig-out" / "dist"
     archives = sorted(dist_dir.glob(f"libghostty-vt-*+{head}.tar.gz"))
+    if not archives:
+        # A tagged release names its dist by version alone. Accept it only
+        # when HEAD carries that exact release tag, so a stale archive from
+        # another checkout is never vendored.
+        archives = [
+            candidate
+            for version in head_release_versions(source_repo)
+            if (candidate := dist_dir / f"libghostty-vt-{version}.tar.gz").exists()
+        ]
     if not archives:
         raise FileNotFoundError(
             f"no libghostty-vt dist archive for HEAD {head} found in {dist_dir}"

@@ -19,7 +19,6 @@ use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem;
 use std::ops::RangeInclusive;
-use std::os::raw::c_char;
 use std::ptr;
 use std::slice;
 use std::sync::{Arc, Mutex, Once, OnceLock};
@@ -72,6 +71,19 @@ impl GhosttyResultExt for ffi::GhosttyResult {
         } else {
             Err(Error(self))
         }
+    }
+}
+
+/// Checks the result of a setter whose Rust wrapper cannot fail.
+///
+/// libghostty-vt 1.0 setters report rejected values; earlier versions
+/// ignored them silently. Herdr only passes valid values, so a failure is a
+/// binding bug: debug builds fail loudly and release builds log and keep the
+/// previous silent-ignore behavior.
+fn check_setter(result: ffi::GhosttyResult, setter: &'static str) {
+    if result != ffi::GhosttyResult_GHOSTTY_SUCCESS {
+        tracing::warn!(setter, result, "libghostty-vt rejected a setter value");
+        debug_assert!(false, "libghostty-vt rejected {setter}: {result}");
     }
 }
 
@@ -197,21 +209,23 @@ pub const MODE_BRACKETED_PASTE: u16 = 2004;
 pub const MODE_SYNCHRONIZED_OUTPUT: u16 = 2026;
 pub const MODE_GRAPHEME_CLUSTER: u16 = 2027;
 pub const MODE_COLOR_SCHEME_REPORT: u16 = 2031;
-// These are documented in vendor/libghostty-vt/include/ghostty/vt/terminal.h,
-// but the generated bindings do not currently expose named constants for them.
-const TERMINAL_DATA_COLOR_FOREGROUND: ffi::GhosttyTerminalData = 18;
-const TERMINAL_DATA_COLOR_CURSOR: ffi::GhosttyTerminalData = 20;
+// Use the generated names so a renumbered enum fails to compile instead of
+// silently querying another key.
+const TERMINAL_DATA_COLOR_FOREGROUND: ffi::GhosttyTerminalData =
+    ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_COLOR_FOREGROUND;
+const TERMINAL_DATA_COLOR_CURSOR: ffi::GhosttyTerminalData =
+    ffi::GhosttyTerminalData_GHOSTTY_TERMINAL_DATA_COLOR_CURSOR;
 
 const KITTY_IMAGE_STORAGE_LIMIT_BYTES: u64 = 64 * 1024 * 1024;
 const APC_MAX_BYTES: usize = 16 * 1024 * 1024;
 const APC_MAX_BYTES_KITTY: usize = 16 * 1024 * 1024;
 pub const KITTY_UNICODE_PLACEHOLDER: u32 = 0x10EEEE;
-// The vendored C headers expose these placement fields, but the checked-in
-// generated bindings predate the names. Keep the explicit values aligned with
-// vendor/libghostty-vt/include/ghostty/vt/kitty_graphics.h.
-const KITTY_PLACEMENT_DATA_IS_VIRTUAL: ffi::GhosttyKittyGraphicsPlacementData = 3;
-const KITTY_PLACEMENT_DATA_COLUMNS: ffi::GhosttyKittyGraphicsPlacementData = 10;
-const KITTY_PLACEMENT_DATA_ROWS: ffi::GhosttyKittyGraphicsPlacementData = 11;
+const KITTY_PLACEMENT_DATA_IS_VIRTUAL: ffi::GhosttyKittyGraphicsPlacementData =
+    ffi::GhosttyKittyGraphicsPlacementData_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_IS_VIRTUAL;
+const KITTY_PLACEMENT_DATA_COLUMNS: ffi::GhosttyKittyGraphicsPlacementData =
+    ffi::GhosttyKittyGraphicsPlacementData_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_COLUMNS;
+const KITTY_PLACEMENT_DATA_ROWS: ffi::GhosttyKittyGraphicsPlacementData =
+    ffi::GhosttyKittyGraphicsPlacementData_GHOSTTY_KITTY_GRAPHICS_PLACEMENT_DATA_ROWS;
 
 static INSTALL_PNG_DECODER: Once = Once::new();
 static KITTY_PLACEHOLDER_DIACRITICS: OnceLock<HashMap<u32, u32>> = OnceLock::new();
@@ -322,17 +336,11 @@ pub enum CursorVisualStyle {
 }
 
 impl CursorVisualStyle {
-    fn from_raw(value: ffi::GhosttyRenderStateCursorVisualStyle) -> Self {
+    fn from_raw(value: ffi::GhosttyCursorStyle) -> Self {
         match value {
-            ffi::GhosttyRenderStateCursorVisualStyle_GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK => {
-                Self::Block
-            }
-            ffi::GhosttyRenderStateCursorVisualStyle_GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_UNDERLINE => {
-                Self::Underline
-            }
-            ffi::GhosttyRenderStateCursorVisualStyle_GHOSTTY_RENDER_STATE_CURSOR_VISUAL_STYLE_BLOCK_HOLLOW => {
-                Self::BlockHollow
-            }
+            ffi::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BLOCK => Self::Block,
+            ffi::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_UNDERLINE => Self::Underline,
+            ffi::GhosttyCursorStyle_GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => Self::BlockHollow,
             _ => Self::Bar,
         }
     }
@@ -418,18 +426,36 @@ impl From<ffi::GhosttyStyle> for CellStyle {
             fg_color: cell_color_from_style_color(value.fg_color),
             bg_color: cell_color_from_style_color(value.bg_color),
             underline_color: cell_color_from_style_color(value.underline_color),
-            bold: value.bold,
-            italic: value.italic,
-            faint: value.faint,
-            blink: value.blink,
-            inverse: value.inverse,
-            invisible: value.invisible,
-            strikethrough: value.strikethrough,
-            overline: value.overline,
-            underline: normalize_underline_style(value.underline),
-            underlined: value.underline != 0,
+            bold: value.flags & STYLE_FLAG_BOLD != 0,
+            italic: value.flags & STYLE_FLAG_ITALIC != 0,
+            faint: value.flags & STYLE_FLAG_FAINT != 0,
+            blink: value.flags & STYLE_FLAG_BLINK != 0,
+            inverse: value.flags & STYLE_FLAG_INVERSE != 0,
+            invisible: value.flags & STYLE_FLAG_INVISIBLE != 0,
+            strikethrough: value.flags & STYLE_FLAG_STRIKETHROUGH != 0,
+            overline: value.flags & STYLE_FLAG_OVERLINE != 0,
+            underline: normalize_underline_style(style_underline(value.flags)),
+            underlined: style_underline(value.flags) != 0,
         }
     }
+}
+
+// GhosttyStyleFlags bit masks. bindgen cannot evaluate the casting
+// GHOSTTY_STYLE_FLAG_* macros in style.h, so they are mirrored here and
+// pinned by `style_flag_masks_match_sgr_attributes`.
+const STYLE_FLAG_BOLD: ffi::GhosttyStyleFlags = 1 << 0;
+const STYLE_FLAG_ITALIC: ffi::GhosttyStyleFlags = 1 << 1;
+const STYLE_FLAG_FAINT: ffi::GhosttyStyleFlags = 1 << 2;
+const STYLE_FLAG_BLINK: ffi::GhosttyStyleFlags = 1 << 3;
+const STYLE_FLAG_INVERSE: ffi::GhosttyStyleFlags = 1 << 4;
+const STYLE_FLAG_INVISIBLE: ffi::GhosttyStyleFlags = 1 << 5;
+const STYLE_FLAG_STRIKETHROUGH: ffi::GhosttyStyleFlags = 1 << 6;
+const STYLE_FLAG_OVERLINE: ffi::GhosttyStyleFlags = 1 << 7;
+const STYLE_UNDERLINE_MASK: ffi::GhosttyStyleFlags = 0x7 << ffi::GHOSTTY_STYLE_UNDERLINE_SHIFT;
+
+/// The GhosttySgrUnderline value packed into style flags (GHOSTTY_STYLE_UNDERLINE).
+fn style_underline(flags: ffi::GhosttyStyleFlags) -> std::os::raw::c_int {
+    ((flags & STYLE_UNDERLINE_MASK) >> ffi::GHOSTTY_STYLE_UNDERLINE_SHIFT).into()
 }
 
 fn normalize_underline_style(value: std::os::raw::c_int) -> u8 {
@@ -440,7 +466,7 @@ fn normalize_underline_style(value: std::os::raw::c_int) -> u8 {
 }
 
 fn cell_color_from_style_color(color: ffi::GhosttyStyleColor) -> Option<CellColor> {
-    match color.tag {
+    match ffi::GhosttyStyleColorTag::from(color.tag) {
         ffi::GhosttyStyleColorTag_GHOSTTY_STYLE_COLOR_PALETTE => {
             // SAFETY: Ghostty's tagged union stores `palette` when the tag is PALETTE.
             Some(CellColor::Palette(unsafe { color.value.palette }))
@@ -579,7 +605,7 @@ unsafe extern "C" fn clipboard_write_trampoline(
     userdata: *mut c_void,
     write: *const ffi::GhosttyClipboardWrite,
 ) {
-    if write.is_null() || unsafe { (*write).size } < mem::size_of::<ffi::GhosttyClipboardWrite>() {
+    if write.is_null() {
         return;
     }
     // The reply and request are borrowed only until this callback returns.
@@ -607,13 +633,8 @@ unsafe fn capture_clipboard_write(
         return ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA;
     }
 
-    let required_size = std::mem::offset_of!(ffi::GhosttyClipboardWrite, contents_len)
-        + std::mem::size_of::<usize>();
-    // SAFETY: size is the leading field of the live request.
-    if unsafe { (*write).size } < required_size {
-        return ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA;
-    }
-    // SAFETY: the size check covers every field accessed below.
+    // SAFETY: GhosttyClipboardWrite is a frozen struct in libghostty-vt 1.0,
+    // and the request stays live for this synchronous callback.
     let request = unsafe { &*write };
     if request.location != ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_STANDARD {
         return ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
@@ -1351,10 +1372,7 @@ impl Terminal {
     fn viewport_graphemes_and_style(&self, x: u16, y: u32) -> Result<(Vec<u32>, CellStyle), Error> {
         let grid_ref = self.grid_ref(ghostty_viewport_point(x, y))?;
         let graphemes = grid_ref_graphemes(&grid_ref)?;
-        let mut style = ffi::GhosttyStyle {
-            size: mem::size_of::<ffi::GhosttyStyle>(),
-            ..Default::default()
-        };
+        let mut style = ffi::GhosttyStyle::default();
         unsafe {
             ffi::ghostty_grid_ref_style(&grid_ref, &mut style).into_result()?;
         }
@@ -1548,10 +1566,7 @@ impl Terminal {
     }
 
     fn grid_ref(&self, point: ffi::GhosttyPoint) -> Result<ffi::GhosttyGridRef, Error> {
-        let mut grid_ref = ffi::GhosttyGridRef {
-            size: mem::size_of::<ffi::GhosttyGridRef>(),
-            ..Default::default()
-        };
+        let mut grid_ref = ffi::GhosttyGridRef::default();
         unsafe {
             ffi::ghostty_terminal_grid_ref(self.raw, point, &mut grid_ref).into_result()?;
         }
@@ -1632,21 +1647,14 @@ impl Terminal {
         unwrap: bool,
         trim: bool,
     ) -> Result<String, Error> {
-        let mut start_ref = ffi::GhosttyGridRef {
-            size: mem::size_of::<ffi::GhosttyGridRef>(),
-            ..Default::default()
-        };
-        let mut end_ref = ffi::GhosttyGridRef {
-            size: mem::size_of::<ffi::GhosttyGridRef>(),
-            ..Default::default()
-        };
+        let mut start_ref = ffi::GhosttyGridRef::default();
+        let mut end_ref = ffi::GhosttyGridRef::default();
         unsafe {
             ffi::ghostty_terminal_grid_ref(self.raw, start, &mut start_ref).into_result()?;
             ffi::ghostty_terminal_grid_ref(self.raw, end, &mut end_ref).into_result()?;
         }
 
         let selection = ffi::GhosttySelection {
-            size: mem::size_of::<ffi::GhosttySelection>(),
             start: start_ref,
             end: end_ref,
             rectangle,
@@ -1662,24 +1670,52 @@ impl Terminal {
         trim: bool,
     ) -> Result<String, Error> {
         let mut formatter: ffi::GhosttyFormatter = ptr::null_mut();
-        let options = ffi::GhosttyFormatterTerminalOptions {
-            size: mem::size_of::<ffi::GhosttyFormatterTerminalOptions>(),
-            emit: format.as_raw(),
-            unwrap,
-            trim,
-            extra: ffi::GhosttyFormatterTerminalExtra {
-                size: mem::size_of::<ffi::GhosttyFormatterTerminalExtra>(),
-                screen: ffi::GhosttyFormatterScreenExtra {
-                    size: mem::size_of::<ffi::GhosttyFormatterScreenExtra>(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            selection,
-        };
         unsafe {
-            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw, options)
+            ffi::ghostty_formatter_terminal_new(ptr::null(), &mut formatter, self.raw)
                 .into_result()?;
+        }
+        let emit = format.as_raw();
+        // libghostty-vt 1.0 defaults to palette, style and hyperlink extras;
+        // Herdr's reads have always formatted cell contents only.
+        let extras: ffi::GhosttyFormatterExtras = 0;
+        let configured = (|| -> Result<(), Error> {
+            // SAFETY: formatter is live and every value matches its option's type.
+            unsafe {
+                ffi::ghostty_formatter_set(
+                    formatter,
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_EMIT,
+                    (&emit as *const ffi::GhosttyFormatterFormat).cast(),
+                )
+                .into_result()?;
+                ffi::ghostty_formatter_set(
+                    formatter,
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_UNWRAP,
+                    (&unwrap as *const bool).cast(),
+                )
+                .into_result()?;
+                ffi::ghostty_formatter_set(
+                    formatter,
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_TRIM,
+                    (&trim as *const bool).cast(),
+                )
+                .into_result()?;
+                ffi::ghostty_formatter_set(
+                    formatter,
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_EXTRAS,
+                    (&extras as *const ffi::GhosttyFormatterExtras).cast(),
+                )
+                .into_result()?;
+                ffi::ghostty_formatter_set(
+                    formatter,
+                    ffi::GhosttyFormatterOption_GHOSTTY_FORMATTER_OPT_SELECTION,
+                    (selection as *const ffi::GhosttySelection).cast(),
+                )
+                .into_result()
+            }
+        })();
+        if let Err(err) = configured {
+            unsafe { ffi::ghostty_formatter_free(formatter) };
+            return Err(err);
         }
 
         let mut out_ptr = ptr::null_mut();
@@ -1714,7 +1750,7 @@ impl Terminal {
 
     pub fn scroll_viewport_bottom(&mut self) {
         let viewport = ffi::GhosttyTerminalScrollViewport {
-            tag: ffi::GhosttyTerminalScrollViewportTag_GHOSTTY_SCROLL_VIEWPORT_BOTTOM,
+            tag: ffi::GhosttyTerminalScrollViewportTag_GHOSTTY_TERMINAL_SCROLL_VIEWPORT_BOTTOM,
             value: ffi::GhosttyTerminalScrollViewportValue::default(),
         };
         // SAFETY: self.raw is valid and viewport value matches the tag.
@@ -1725,7 +1761,7 @@ impl Terminal {
 
     pub fn scroll_viewport_delta(&mut self, delta: isize) {
         let viewport = ffi::GhosttyTerminalScrollViewport {
-            tag: ffi::GhosttyTerminalScrollViewportTag_GHOSTTY_SCROLL_VIEWPORT_DELTA,
+            tag: ffi::GhosttyTerminalScrollViewportTag_GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA,
             value: ffi::GhosttyTerminalScrollViewportValue { delta },
         };
         // SAFETY: self.raw is valid and viewport value matches the tag.
@@ -1736,7 +1772,7 @@ impl Terminal {
 
     pub fn scroll_viewport_row(&mut self, row: usize) {
         let viewport = ffi::GhosttyTerminalScrollViewport {
-            tag: ffi::GhosttyTerminalScrollViewportTag_GHOSTTY_SCROLL_VIEWPORT_ROW,
+            tag: ffi::GhosttyTerminalScrollViewportTag_GHOSTTY_TERMINAL_SCROLL_VIEWPORT_ROW,
             value: ffi::GhosttyTerminalScrollViewportValue { row },
         };
         // SAFETY: self.raw is valid and viewport value matches the tag.
@@ -1878,7 +1914,7 @@ impl Terminal {
                 }
                 let generation = kitty_image_u64(
                     image,
-                    ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_GENERATION,
+                    ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_GENERATION,
                 )?;
                 Ok(self.kitty_fingerprints.lock().ok().and_then(|cache| {
                     cache
@@ -1962,7 +1998,7 @@ impl Terminal {
         let (data_ptr, data_len) = data;
         let Ok(generation) = kitty_image_u64(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_GENERATION,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_GENERATION,
         ) else {
             return kitty_image_fingerprint(data_ptr, data_len, image_width, image_height, format);
         };
@@ -2098,11 +2134,11 @@ impl Terminal {
 
         let image_width = kitty_image_u32(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_WIDTH,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH,
         )?;
         let image_height = kitty_image_u32(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
         )?;
         let format = kitty_image_format(image)?;
         let compression = kitty_image_compression(image)?;
@@ -2227,11 +2263,11 @@ impl Terminal {
             }
             let image_width = kitty_image_u32(
                 image,
-                ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_WIDTH,
+                ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH,
             )?;
             let image_height = kitty_image_u32(
                 image,
-                ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_HEIGHT,
+                ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
             )?;
             let format = kitty_image_format(image)?;
             let compression = kitty_image_compression(image)?;
@@ -2743,7 +2779,7 @@ fn kitty_image_format(image: ffi::GhosttyKittyGraphicsImage) -> Result<KittyImag
     unsafe {
         ffi::ghostty_kitty_graphics_image_get(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_FORMAT,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT,
             (&mut out as *mut ffi::GhosttyKittyImageFormat).cast(),
         )
         .into_result()?;
@@ -2763,7 +2799,7 @@ fn kitty_image_compression(
     unsafe {
         ffi::ghostty_kitty_graphics_image_get(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_COMPRESSION,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_COMPRESSION,
             (&mut out as *mut ffi::GhosttyKittyImageCompression).cast(),
         )
         .into_result()?;
@@ -2784,7 +2820,7 @@ fn kitty_image_transmission_payload(
     let result = unsafe {
         ffi::ghostty_kitty_graphics_image_get(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_PTR,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_ENCODED_PNG_PTR,
             (&mut ptr_out as *mut *const u8).cast(),
         )
     };
@@ -2797,7 +2833,7 @@ fn kitty_image_transmission_payload(
     unsafe {
         ffi::ghostty_kitty_graphics_image_get(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_ENCODED_PNG_LEN,
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_ENCODED_PNG_LEN,
             (&mut len as *mut usize).cast(),
         )
         .into_result()?;
@@ -2808,23 +2844,21 @@ fn kitty_image_transmission_payload(
 fn kitty_image_data_ptr_len(
     image: ffi::GhosttyKittyGraphicsImage,
 ) -> Result<(*const u8, usize), Error> {
-    let mut ptr_out: *const u8 = ptr::null();
-    let mut len = 0usize;
+    // PIXELS reports pointer and decoded length together; it is NO_VALUE
+    // while the payload is pending, like the former DATA_PTR query.
+    let mut pixels = ffi::GhosttyString {
+        ptr: ptr::null(),
+        len: 0,
+    };
     unsafe {
         ffi::ghostty_kitty_graphics_image_get(
             image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_PTR,
-            (&mut ptr_out as *mut *const u8).cast(),
-        )
-        .into_result()?;
-        ffi::ghostty_kitty_graphics_image_get(
-            image,
-            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_IMAGE_DATA_DATA_LEN,
-            (&mut len as *mut usize).cast(),
+            ffi::GhosttyKittyGraphicsImageData_GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
+            (&mut pixels as *mut ffi::GhosttyString).cast(),
         )
         .into_result()?;
     }
-    Ok((ptr_out, len))
+    Ok((pixels.ptr, pixels.len))
 }
 
 fn kitty_image_data_from_ptr(ptr_out: *const u8, len: usize) -> Vec<u8> {
@@ -2982,7 +3016,7 @@ impl RenderState {
         unsafe {
             ffi::ghostty_render_state_set(
                 self.raw,
-                ffi::GhosttyRenderStateOption_GHOSTTY_RENDER_STATE_OPTION_DIRTY,
+                ffi::GhosttyRenderStateOption_GHOSTTY_RENDER_STATE_OPT_DIRTY,
                 (&value as *const ffi::GhosttyRenderStateDirty).cast(),
             )
             .into_result()
@@ -3049,38 +3083,57 @@ impl KeyEvent {
     }
 
     pub fn set_action(&mut self, action: ffi::GhosttyKeyAction) {
-        unsafe { ffi::ghostty_key_event_set_action(self.raw, action) }
+        check_setter(
+            unsafe { ffi::ghostty_key_event_set_action(self.raw, action) },
+            "ghostty_key_event_set_action",
+        )
     }
 
     pub fn set_key(&mut self, key: ffi::GhosttyKey) {
-        unsafe { ffi::ghostty_key_event_set_key(self.raw, key) }
+        check_setter(
+            unsafe { ffi::ghostty_key_event_set_key(self.raw, key) },
+            "ghostty_key_event_set_key",
+        )
     }
 
     pub fn set_mods(&mut self, mods: u16) {
-        unsafe { ffi::ghostty_key_event_set_mods(self.raw, mods) }
+        check_setter(
+            unsafe { ffi::ghostty_key_event_set_mods(self.raw, mods) },
+            "ghostty_key_event_set_mods",
+        )
     }
 
     pub fn set_utf8(&mut self, text: &str) {
         self.utf8 = Box::from(text);
-        unsafe {
-            ffi::ghostty_key_event_set_utf8(
-                self.raw,
-                self.utf8.as_ptr().cast::<c_char>(),
-                self.utf8.len(),
-            )
-        }
+        let utf8 = ffi::GhosttyString {
+            ptr: self.utf8.as_ptr(),
+            len: self.utf8.len(),
+        };
+        check_setter(
+            unsafe { ffi::ghostty_key_event_set_utf8(self.raw, utf8) },
+            "ghostty_key_event_set_utf8",
+        )
     }
 
     pub fn set_unshifted_codepoint(&mut self, codepoint: u32) {
-        unsafe { ffi::ghostty_key_event_set_unshifted_codepoint(self.raw, codepoint) }
+        check_setter(
+            unsafe { ffi::ghostty_key_event_set_unshifted_codepoint(self.raw, codepoint) },
+            "ghostty_key_event_set_unshifted_codepoint",
+        )
     }
 
     pub fn set_consumed_mods(&mut self, mods: u16) {
-        unsafe { ffi::ghostty_key_event_set_consumed_mods(self.raw, mods) }
+        check_setter(
+            unsafe { ffi::ghostty_key_event_set_consumed_mods(self.raw, mods) },
+            "ghostty_key_event_set_consumed_mods",
+        )
     }
 
     pub fn set_composing(&mut self, composing: bool) {
-        unsafe { ffi::ghostty_key_event_set_composing(self.raw, composing) }
+        check_setter(
+            unsafe { ffi::ghostty_key_event_set_composing(self.raw, composing) },
+            "ghostty_key_event_set_composing",
+        )
     }
 }
 
@@ -3102,7 +3155,10 @@ impl KeyEncoder {
     }
 
     pub fn set_from_terminal(&mut self, terminal: &Terminal) {
-        unsafe { ffi::ghostty_key_encoder_setopt_from_terminal(self.raw, terminal.raw()) }
+        check_setter(
+            unsafe { ffi::ghostty_key_encoder_set_from_terminal(self.raw, terminal.raw()) },
+            "ghostty_key_encoder_set_from_terminal",
+        )
     }
 
     /// Whether macOS Option acts as Alt (ESC prefix) rather than a text
@@ -3113,13 +3169,16 @@ impl KeyEncoder {
         } else {
             ffi::GhosttyOptionAsAlt_GHOSTTY_OPTION_AS_ALT_FALSE
         };
-        unsafe {
-            ffi::ghostty_key_encoder_setopt(
-                self.raw,
-                ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
-                (&value as *const ffi::GhosttyOptionAsAlt).cast(),
-            )
-        }
+        check_setter(
+            unsafe {
+                ffi::ghostty_key_encoder_set(
+                    self.raw,
+                    ffi::GhosttyKeyEncoderOption_GHOSTTY_KEY_ENCODER_OPT_MACOS_OPTION_AS_ALT,
+                    (&value as *const ffi::GhosttyOptionAsAlt).cast(),
+                )
+            },
+            "ghostty_key_encoder_set",
+        )
     }
 
     pub fn encode(&mut self, event: &KeyEvent) -> Result<Vec<u8>, Error> {
@@ -3150,25 +3209,40 @@ impl MouseEvent {
     }
 
     pub fn set_action(&mut self, action: ffi::GhosttyMouseAction) {
-        unsafe { ffi::ghostty_mouse_event_set_action(self.raw, action) }
+        check_setter(
+            unsafe { ffi::ghostty_mouse_event_set_action(self.raw, action) },
+            "ghostty_mouse_event_set_action",
+        )
     }
 
     pub fn set_button(&mut self, button: ffi::GhosttyMouseButton) {
-        unsafe { ffi::ghostty_mouse_event_set_button(self.raw, button) }
+        check_setter(
+            unsafe { ffi::ghostty_mouse_event_set_button(self.raw, button) },
+            "ghostty_mouse_event_set_button",
+        )
     }
 
     pub fn clear_button(&mut self) {
-        unsafe { ffi::ghostty_mouse_event_clear_button(self.raw) }
+        check_setter(
+            unsafe { ffi::ghostty_mouse_event_clear_button(self.raw) },
+            "ghostty_mouse_event_clear_button",
+        )
     }
 
     pub fn set_mods(&mut self, mods: u16) {
-        unsafe { ffi::ghostty_mouse_event_set_mods(self.raw, mods) }
+        check_setter(
+            unsafe { ffi::ghostty_mouse_event_set_mods(self.raw, mods) },
+            "ghostty_mouse_event_set_mods",
+        )
     }
 
     pub fn set_position(&mut self, x: f32, y: f32) {
-        unsafe {
-            ffi::ghostty_mouse_event_set_position(self.raw, ffi::GhosttyMousePosition { x, y })
-        }
+        check_setter(
+            unsafe {
+                ffi::ghostty_mouse_event_set_position(self.raw, ffi::GhosttyMousePosition { x, y })
+            },
+            "ghostty_mouse_event_set_position",
+        )
     }
 }
 
@@ -3190,7 +3264,10 @@ impl MouseEncoder {
     }
 
     pub fn set_from_terminal(&mut self, terminal: &Terminal) {
-        unsafe { ffi::ghostty_mouse_encoder_setopt_from_terminal(self.raw, terminal.raw()) }
+        check_setter(
+            unsafe { ffi::ghostty_mouse_encoder_set_from_terminal(self.raw, terminal.raw()) },
+            "ghostty_mouse_encoder_set_from_terminal",
+        )
     }
 
     pub fn set_size(
@@ -3211,23 +3288,29 @@ impl MouseEncoder {
             padding_right: 0,
             padding_left: 0,
         };
-        unsafe {
-            ffi::ghostty_mouse_encoder_setopt(
-                self.raw,
-                ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
-                (&size as *const ffi::GhosttyMouseEncoderSize).cast(),
-            )
-        }
+        check_setter(
+            unsafe {
+                ffi::ghostty_mouse_encoder_set(
+                    self.raw,
+                    ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_SIZE,
+                    (&size as *const ffi::GhosttyMouseEncoderSize).cast(),
+                )
+            },
+            "ghostty_mouse_encoder_set",
+        )
     }
 
     pub fn set_format(&mut self, format: ffi::GhosttyMouseFormat) {
-        unsafe {
-            ffi::ghostty_mouse_encoder_setopt(
-                self.raw,
-                ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_FORMAT,
-                (&format as *const ffi::GhosttyMouseFormat).cast(),
-            )
-        }
+        check_setter(
+            unsafe {
+                ffi::ghostty_mouse_encoder_set(
+                    self.raw,
+                    ffi::GhosttyMouseEncoderOption_GHOSTTY_MOUSE_ENCODER_OPT_FORMAT,
+                    (&format as *const ffi::GhosttyMouseFormat).cast(),
+                )
+            },
+            "ghostty_mouse_encoder_set",
+        )
     }
 
     pub fn encode(&mut self, event: &MouseEvent) -> Result<Vec<u8>, Error> {
@@ -3244,7 +3327,7 @@ impl Drop for MouseEncoder {
 }
 
 fn encode_with_retry(
-    mut encode: impl FnMut(*mut c_char, usize, *mut usize) -> ffi::GhosttyResult,
+    mut encode: impl FnMut(*mut u8, usize, *mut usize) -> ffi::GhosttyResult,
 ) -> Result<Vec<u8>, Error> {
     let mut required = 0usize;
     let result = encode(ptr::null_mut(), 0, &mut required);
@@ -3253,12 +3336,7 @@ fn encode_with_retry(
     }
     let mut buffer = vec![0u8; required.max(16)];
     let mut written = 0usize;
-    encode(
-        buffer.as_mut_ptr().cast::<c_char>(),
-        buffer.len(),
-        &mut written,
-    )
-    .into_result()?;
+    encode(buffer.as_mut_ptr(), buffer.len(), &mut written).into_result()?;
     buffer.truncate(written);
     Ok(buffer)
 }
@@ -3369,7 +3447,7 @@ impl<'a> RowIter<'a> {
         unsafe {
             ffi::ghostty_render_state_row_set(
                 self.iterator.raw,
-                ffi::GhosttyRenderStateRowOption_GHOSTTY_RENDER_STATE_ROW_OPTION_DIRTY,
+                ffi::GhosttyRenderStateRowOption_GHOSTTY_RENDER_STATE_ROW_OPT_DIRTY,
                 (&dirty as *const bool).cast(),
             )
             .into_result()
@@ -3502,10 +3580,7 @@ impl<'a> RowCellIter<'a> {
 
     pub fn basic_data(&self) -> Result<CellBasicData, Error> {
         let mut raw = ffi::GhosttyCell::default();
-        let mut style = ffi::GhosttyStyle {
-            size: mem::size_of::<ffi::GhosttyStyle>(),
-            ..Default::default()
-        };
+        let mut style = ffi::GhosttyStyle::default();
         let mut has_styling = false;
         let row_keys = [
             ffi::GhosttyRenderStateRowCellsData_GHOSTTY_RENDER_STATE_ROW_CELLS_DATA_RAW,
@@ -3587,10 +3662,7 @@ impl<'a> RowCellIter<'a> {
     }
 
     pub fn style(&self) -> Result<CellStyle, Error> {
-        let mut style = ffi::GhosttyStyle {
-            size: mem::size_of::<ffi::GhosttyStyle>(),
-            ..Default::default()
-        };
+        let mut style = ffi::GhosttyStyle::default();
         unsafe {
             ffi::ghostty_render_state_row_cells_get(
                 self.cells.raw,
@@ -4951,7 +5023,6 @@ mod tests {
     fn invoke_clipboard_callback(
         terminal: &mut Terminal,
         contents: &[ffi::GhosttyClipboardContent],
-        size: usize,
     ) -> ffi::GhosttyClipboardWriteResult {
         unsafe extern "C" fn reply(
             request: *const ffi::GhosttyClipboardWrite,
@@ -4970,7 +5041,6 @@ mod tests {
             0usize,
         );
         let request = ffi::GhosttyClipboardWrite {
-            size,
             location: ffi::GhosttyClipboardLocation_GHOSTTY_CLIPBOARD_LOCATION_STANDARD,
             contents: contents.as_ptr(),
             contents_len: contents.len(),
@@ -4986,10 +5056,7 @@ mod tests {
                 &request,
             );
         }
-        assert_eq!(
-            response.2,
-            usize::from(size >= mem::size_of::<ffi::GhosttyClipboardWrite>())
-        );
+        assert_eq!(response.2, 1, "every write must be answered exactly once");
         assert!(!response.1, "migration must not create clipboard grants");
         response.0
     }
@@ -4997,38 +5064,30 @@ mod tests {
     #[test]
     fn clipboard_callback_ignores_clear_and_rejects_unsupported_writes() {
         let mut terminal = Terminal::new(10, 5, 0).unwrap();
-        let full_size = std::mem::size_of::<ffi::GhosttyClipboardWrite>();
         let success = ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_SUCCESS;
         let unsupported =
             ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_UNSUPPORTED;
         let invalid = ffi::GhosttyClipboardWriteResult_GHOSTTY_CLIPBOARD_WRITE_RESULT_INVALID_DATA;
 
-        assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[], full_size),
-            success
-        );
+        assert_eq!(invoke_clipboard_callback(&mut terminal, &[]), success);
         assert!(terminal.take_clipboard_writes().is_empty());
 
         let empty = test_clipboard_content(b"text/plain", b"");
         assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[empty], full_size),
+            invoke_clipboard_callback(&mut terminal, &[empty]),
             unsupported
         );
         let text = test_clipboard_content(b"text/plain", b"text");
         let image = test_clipboard_content(b"image/png", b"image");
         assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[text, image], full_size),
+            invoke_clipboard_callback(&mut terminal, &[text, image]),
             unsupported
         );
 
         let oversized = vec![b'x'; MAX_CLIPBOARD_BYTES + 1];
         let oversized = test_clipboard_content(b"text/plain", &oversized);
         assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[oversized], full_size),
-            invalid
-        );
-        assert_eq!(
-            invoke_clipboard_callback(&mut terminal, &[text], full_size - 1),
+            invoke_clipboard_callback(&mut terminal, &[oversized]),
             invalid
         );
         assert!(terminal.take_clipboard_writes().is_empty());
@@ -5075,5 +5134,62 @@ mod tests {
         assert!(basic.has_styling);
         assert_eq!(basic.style.fg_color, Some(CellColor::Palette(1)));
         assert!(!basic.has_hyperlink);
+    }
+
+    #[test]
+    fn style_flag_masks_match_sgr_attributes() {
+        // One cell per attribute, each reset afterward, so a wrong mask shows
+        // up as a missing or misattributed flag on exactly one cell.
+        let sgr: [&[u8]; 13] = [
+            b"1", b"3", b"2", b"5", b"7", b"8", b"9", b"53", b"4:1", b"4:2", b"4:3", b"4:4", b"4:5",
+        ];
+        let mut input = Vec::new();
+        for code in sgr {
+            input.extend_from_slice(b"\x1b[");
+            input.extend_from_slice(code);
+            input.extend_from_slice(b"mX\x1b[0m");
+        }
+        let mut terminal = Terminal::new(20, 2, 0).unwrap();
+        terminal.write(&input);
+
+        let mut render_state = RenderState::new().unwrap();
+        render_state.update(&terminal).unwrap();
+        let mut row_iterator = RowIterator::new().unwrap();
+        let mut rows = render_state
+            .populate_row_iterator(&mut row_iterator)
+            .unwrap();
+        assert!(rows.next());
+        let mut row_cells = RowCells::new().unwrap();
+        let mut cells = rows.populate_cells(&mut row_cells).unwrap();
+        let mut styles = Vec::new();
+        for _ in 0..sgr.len() {
+            assert!(cells.next());
+            styles.push(cells.style().unwrap());
+        }
+
+        let flags = |style: &CellStyle| {
+            [
+                style.bold,
+                style.italic,
+                style.faint,
+                style.blink,
+                style.inverse,
+                style.invisible,
+                style.strikethrough,
+                style.overline,
+            ]
+        };
+        for (index, style) in styles.iter().take(8).enumerate() {
+            let mut expected = [false; 8];
+            expected[index] = true;
+            assert_eq!(flags(style), expected, "attribute cell {index}");
+            assert!(!style.underlined, "attribute cell {index} has no underline");
+        }
+        for (offset, style) in styles.iter().skip(8).enumerate() {
+            assert_eq!(flags(style), [false; 8], "underline cell {offset}");
+            assert!(style.underlined);
+            // GhosttySgrUnderline: single=1, double=2, curly=3, dotted=4, dashed=5.
+            assert_eq!(style.underline, offset as u8 + 1);
+        }
     }
 }

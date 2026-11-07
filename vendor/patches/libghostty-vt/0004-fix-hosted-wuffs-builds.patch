@@ -1,16 +1,35 @@
+diff --git a/vendor/libghostty-vt/pkg/wuffs/build.zig b/vendor/libghostty-vt/pkg/wuffs/build.zig
+index 80252a3e3..a721486da 100644
 --- a/vendor/libghostty-vt/pkg/wuffs/build.zig
 +++ b/vendor/libghostty-vt/pkg/wuffs/build.zig
-@@ -59,6 +59,7 @@
-             .target = target,
-             .optimize = optimize,
+@@ -39,6 +39,10 @@ pub fn build(b: *std.Build) !void {
+ 
+     // Windows always has a libc available.
+     const windows = target.result.os.tag == .windows;
++    const windows_libc_file: ?[]const u8 = if (windows)
++        b.graph.environ_map.get("LIBGHOSTTY_VT_WINDOWS_LIBC")
++    else
++        null;
+ 
+     translate: {
+         const wuffs_dep = b.lazyDependency("wuffs", .{}) orelse break :translate;
+@@ -98,6 +102,11 @@ pub fn build(b: *std.Build) !void {
+             .include_paths = include_paths,
              .link_libc = windows,
-+            .libc_file = if (b.libc_file) |path| .{ .cwd_relative = path } else null,
+             .extra_args = macro_flags,
++            // Herdr: translate-c runs as its own step and never sees the
++            // build's --libc file, which Zig 0.17 no longer exposes to
++            // build scripts. Windows cross-builds pass the same Zig libc
++            // configuration through LIBGHOSTTY_VT_WINDOWS_LIBC instead.
++            .libc_file = if (windows_libc_file) |path| .{ .direct = .{ .cwd_relative = path } } else .detect_darwin,
          });
  
-         // Wuffs only needs stdlib.h and string.h from libc, and only for
+         wuffs_c.mod.addCSourceFile(.{
+diff --git a/vendor/libghostty-vt/pkg/wuffs/src/main.zig b/vendor/libghostty-vt/pkg/wuffs/src/main.zig
+index f9aa7c3ab..0f45b876c 100644
 --- a/vendor/libghostty-vt/pkg/wuffs/src/main.zig
 +++ b/vendor/libghostty-vt/pkg/wuffs/src/main.zig
-@@ -19,12 +19,11 @@
+@@ -20,12 +20,11 @@ pub const ImageData = struct {
  // Wuffs' generated `wuffs_foo__bar__alloc()` convenience functions are the
  // only code that references libc's calloc/free. We never call them
  // and linker garbage collection strips them, but that isn't guaranteed.
