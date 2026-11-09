@@ -54,8 +54,11 @@ main() {
 
     # Install into a scratch root so cargo's own install tracking is not
     # touched, then move the binary into place ourselves.
+    # The fork label goes in the build channel, not Cargo.toml: herdr parses
+    # its package version as plain X.Y.Z, and this makes --version print
+    # "<version>-fork" without breaking that parse.
     # shellcheck disable=SC2086 # source_args is two intentional words
-    "$MISE" exec "rust@${RUST_VERSION}" "zig@${ZIG_VERSION}" -- \
+    HERDR_BUILD_CHANNEL="${HERDR_BUILD_CHANNEL:-fork}" "$MISE" exec "rust@${RUST_VERSION}" "zig@${ZIG_VERSION}" -- \
         cargo install --locked --git "$REPO" $source_args --root "${TMP}/root" "$BIN" \
         || err "build failed"
 

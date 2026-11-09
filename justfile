@@ -93,7 +93,7 @@ build:
 install-local dest='':
     #!/usr/bin/env bash
     set -euo pipefail
-    cargo build --release --locked
+    HERDR_BUILD_CHANNEL="${HERDR_BUILD_CHANNEL:-fork}" cargo build --release --locked
     dest="{{dest}}"
     if [ -z "$dest" ]; then
         current="$(command -v herdr || true)"
