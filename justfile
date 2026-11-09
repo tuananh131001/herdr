@@ -88,6 +88,34 @@ build:
 build:
     python scripts/package_windows_conpty.py build-local
 
+# Build a release binary, install it over the herdr on PATH (or dest), and live-hand-off a running server
+[unix]
+install-local dest='':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --release --locked
+    dest="{{dest}}"
+    if [ -z "$dest" ]; then
+        current="$(command -v herdr || true)"
+        if [ -z "$current" ]; then
+            echo "no herdr on PATH; pass dest=<path>" >&2
+            exit 1
+        fi
+        dest="$(realpath "$current")"
+    fi
+    # Write beside the target and rename so a running binary is replaced atomically.
+    tmp="$(mktemp "$(dirname "$dest")/.herdr-install.XXXXXX")"
+    trap 'rm -f "$tmp"' EXIT
+    install -m 755 target/release/herdr "$tmp"
+    mv -f "$tmp" "$dest"
+    echo "installed $("$dest" --version) -> $dest"
+    if "$dest" status server 2>/dev/null | grep -q '^status: running'; then
+        echo "handing off running server to the new binary..."
+        "$dest" server live-handoff --import-exe "$dest"
+    else
+        echo "no running server; new binary will be used on next launch"
+    fi
+
 # Non-gating full-render scaling profile for background workspaces and active panes
 bench-render-scale:
     cargo test --release --locked --bin herdr render_scale_profile -- --ignored --nocapture --test-threads=1
